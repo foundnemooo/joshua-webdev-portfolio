@@ -1,4 +1,5 @@
-import { useEffect, useState } from "react";
+import { Analytics } from "@vercel/analytics/react";
+import { useEffect, useRef, useState } from "react";
 import { ArrowDownRight, ArrowLeft, ArrowRight, ArrowUpRight, Menu, X } from "lucide-react";
 
 type ProjectSlide =
@@ -90,6 +91,17 @@ const navItems = [
 
 const contactEmail = "lopezjoshuaceazar@gmail.com";
 
+function sectionPath(section: string) {
+  return section ? `/${section}` : "/";
+}
+
+function sectionFromPath(pathname: string) {
+  const path = pathname.replace(/\/+$/, "") || "/";
+  if (path === "/") return "";
+  const section = path.slice(1);
+  return navItems.some(([id]) => id === section) ? section : "";
+}
+
 function SectionLabel({ number, children }: { number: string; children: string }) {
   return <div className="section-label reveal-on-scroll"><span>{number}</span><span>{children}</span></div>;
 }
@@ -137,12 +149,19 @@ function ProjectCarousel({ project, onClose }: { project: Project; onClose: () =
 }
 
 function App() {
-  const [activeSection, setActiveSection] = useState("");
+  const [activeSection, setActiveSection] = useState(() => sectionFromPath(window.location.pathname));
   const [menuOpen, setMenuOpen] = useState(false);
   const [splashDone, setSplashDone] = useState(false);
   const [selectedProject, setSelectedProject] = useState<Project | null>(null);
   const [scrollProgress, setScrollProgress] = useState(0);
   const [emailCopied, setEmailCopied] = useState(false);
+  const pendingSection = useRef<string | null>(null);
+
+  const updateSectionUrl = (section: string, replace: boolean) => {
+    const nextPath = sectionPath(section);
+    if (window.location.pathname === nextPath) return;
+    window.history[replace ? "replaceState" : "pushState"]({}, "", nextPath);
+  };
 
   useEffect(() => {
     const splashTimer = window.setTimeout(() => setSplashDone(true), 1850);
@@ -156,17 +175,46 @@ function App() {
     const revealItems = Array.from(document.querySelectorAll(".reveal-on-scroll"));
     const sectionObserver = new IntersectionObserver((entries) => {
       const visible = entries.filter((entry) => entry.isIntersecting).sort((a, b) => b.intersectionRatio - a.intersectionRatio)[0];
-      if (visible && sections.includes(visible.target as HTMLElement)) setActiveSection(visible.target.id === "landing" ? "" : visible.target.id);
+      if (visible && sections.includes(visible.target as HTMLElement)) {
+        const visibleSection = visible.target.id === "landing" ? "" : visible.target.id;
+        const targetSection = pendingSection.current;
+        if (targetSection !== null) {
+          setActiveSection(targetSection);
+          if (visibleSection === targetSection) pendingSection.current = null;
+        } else {
+          setActiveSection(visibleSection);
+          updateSectionUrl(visibleSection, true);
+        }
+      }
     }, { rootMargin: "-18% 0px -58% 0px", threshold: [0, 0.12, 0.5] });
     const revealObserver = new IntersectionObserver((entries) => {
       entries.forEach((entry) => { if (entry.isIntersecting) entry.target.classList.add("is-visible"); });
     }, { rootMargin: "0px 0px -12% 0px", threshold: 0.01 });
     sections.forEach((section) => sectionObserver.observe(section));
     revealItems.forEach((item) => revealObserver.observe(item));
-    return () => { window.clearTimeout(splashTimer); window.removeEventListener("scroll", updateScrollProgress); sectionObserver.disconnect(); revealObserver.disconnect(); };
+    const initialSection = sectionFromPath(window.location.pathname);
+    if (initialSection) {
+      pendingSection.current = initialSection;
+      window.requestAnimationFrame(() => document.getElementById(initialSection)?.scrollIntoView({ behavior: "auto", block: "start" }));
+    }
+    const handlePopState = () => {
+      const nextSection = sectionFromPath(window.location.pathname);
+      pendingSection.current = nextSection;
+      setActiveSection(nextSection);
+      document.getElementById(nextSection || "landing")?.scrollIntoView({ behavior: "smooth", block: "start" });
+    };
+    window.addEventListener("popstate", handlePopState);
+    return () => { window.clearTimeout(splashTimer); window.removeEventListener("scroll", updateScrollProgress); window.removeEventListener("popstate", handlePopState); sectionObserver.disconnect(); revealObserver.disconnect(); };
   }, []);
 
-  const goTo = (id: string) => { document.getElementById(id)?.scrollIntoView({ behavior: "smooth", block: "start" }); setMenuOpen(false); };
+  const goTo = (id: string) => {
+    const nextSection = id === "landing" ? "" : id;
+    pendingSection.current = nextSection;
+    setActiveSection(nextSection);
+    updateSectionUrl(nextSection, false);
+    document.getElementById(id)?.scrollIntoView({ behavior: "smooth", block: "start" });
+    setMenuOpen(false);
+  };
   const openProject = (project: Project) => setSelectedProject(project);
   const handleEmailClick = async () => {
     try {
@@ -178,8 +226,11 @@ function App() {
     }
   };
 
+  const analyticsPath = sectionPath(activeSection);
+
   return (
     <div className="site-shell">
+      <Analytics route={analyticsPath} path={analyticsPath} />
       <div className="scroll-progress" style={{ width: `${scrollProgress}%` }} aria-hidden="true" />
       <SplashScreen finished={splashDone} />
       <header className="site-header"><button className="wordmark" onClick={() => goTo("landing")} aria-label="Back to the top">joshua<span>.</span></button><button className="menu-toggle" onClick={() => setMenuOpen((open) => !open)} aria-expanded={menuOpen} aria-controls="site-nav"><span>{menuOpen ? "close" : "index"}</span>{menuOpen ? <X size={18} /> : <Menu size={18} />}</button><nav id="site-nav" className={menuOpen ? "site-nav is-open" : "site-nav"} aria-label="Primary navigation">{navItems.map(([id, number]) => <button key={id} className={activeSection === id ? "nav-link is-active" : "nav-link"} onClick={() => goTo(id)}><span>{number}</span>{id}</button>)}</nav></header>
